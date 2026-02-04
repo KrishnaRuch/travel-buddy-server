@@ -15,7 +15,7 @@ function verifyState(state) {
 }
 
 function getClientBaseUrl() {
-  return (process.env.CLIENT_URL || "http://localhost:5173").replace(/\/$/, "");
+  return (process.env.CLIENT_URL || "https://travel-buddy-kr134.vercel.app/").replace(/\/$/, "");
 }
 
 function chatRedirectUrl(flag) {
