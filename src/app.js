@@ -21,7 +21,7 @@ export function createApp(intents) {
   // -------------------------
   const allowedOrigins = [
     process.env.CLIENT_URL,
-    "https://travel-buddy-kr134.vercel.app/",
+    "https://travel-buddy-kr134.vercel.app",
     "http://127.0.0.1:5173"
   ].filter(Boolean);
 
