@@ -19,8 +19,12 @@ export const bookingRouter = express.Router();
 function getServerBaseUrl(req) {
   if (process.env.SERVER_URL) return process.env.SERVER_URL.replace(/\/$/, "");
 
-  const proto = req.headers["x-forwarded-proto"] || "http";
-  const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
+  const proto = (req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  const host =
+    (req.headers["x-forwarded-host"] || req.headers.host || "travel-buddy-server-9zqk.onrender.com")
+      .split(",")[0]
+      .trim();
+
   return `${proto}://${host}`;
 }
 
