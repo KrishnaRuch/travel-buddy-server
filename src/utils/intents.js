@@ -32,7 +32,7 @@ function mapFrenchToEnglishForIntentMatching(message) {
     "hôtel",
     "hebergement",
     "hébergement",
-    "logement"
+    "logement",
   ];
 
   const taxiSignals = [
@@ -42,12 +42,16 @@ function mapFrenchToEnglishForIntentMatching(message) {
     "taxi",
     "chauffeur",
     "transport",
-    "voiture"
+    "voiture",
   ];
 
   const hasReserveVerb =
-    m.includes("reserver") || m.includes("réserver") || m.includes("reservation") || m.includes("réservation") ||
-    m.includes("book") || m.includes("booking");
+    m.includes("reserver") ||
+    m.includes("réserver") ||
+    m.includes("reservation") ||
+    m.includes("réservation") ||
+    m.includes("book") ||
+    m.includes("booking");
 
   const mentionsHotel = hotelSignals.some((k) => m.includes(norm(k)));
   const mentionsTaxi = taxiSignals.some((k) => m.includes(norm(k)));
@@ -88,8 +92,36 @@ function pickResponse(it, lang) {
   return String(en || "").trim();
 }
 
+// --- NEW: safe regex helpers for whole-word / whole-phrase matching ---
+
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Match a pattern as a whole word/phrase (not substring).
+ * Works on already-normalized strings (lowercase, trimmed, accents stripped).
+ *
+ * Examples:
+ *  - "hi" matches "hi there"
+ *  - "hi" does NOT match "things"
+ *  - "book hotel" matches "can you book hotel for me"
+ */
+function matchesWhole(mNorm, patternNorm) {
+  if (!patternNorm) return false;
+  // Word boundaries prevent substring matches (e.g., "things" containing "hi")
+  const re = new RegExp(`\\b${escapeRegex(patternNorm)}\\b`);
+  return re.test(mNorm);
+}
+
 /**
  * matchIntent(intents, message, lang?)
+ * Returns { intent, response } or null
+ *
+ * ✅ Fixes:
+ * - Case-insensitive matching (already via norm())
+ * - Prevents substring collisions ("hi" matching inside "things")
+ * - Prefers most specific match (longest pattern wins)
  */
 export function matchIntent(intents, message, lang = "en") {
   if (!Array.isArray(intents) || !message) return null;
@@ -98,6 +130,8 @@ export function matchIntent(intents, message, lang = "en") {
 
   const msgForMatching = L === "fr" ? mapFrenchToEnglishForIntentMatching(message) : message;
   const m = norm(msgForMatching);
+
+  let best = null;
 
   for (const it of intents) {
     const intentName = it.intent || it.name || it.id;
@@ -110,16 +144,23 @@ export function matchIntent(intents, message, lang = "en") {
       const k = norm(p);
       if (!k) continue;
 
-      if (m.includes(k)) {
-        return {
-          intent: intentName,
-          response: pickResponse(it, L)
-        };
+      if (matchesWhole(m, k)) {
+        // Prefer more specific patterns
+        const score = k.length;
+
+        if (!best || score > best.score) {
+          best = {
+            intent: intentName,
+            response: pickResponse(it, L),
+            score,
+          };
+        }
       }
     }
   }
 
-  return null;
+  if (!best) return null;
+  return { intent: best.intent, response: best.response };
 }
 
 /**
@@ -136,7 +177,7 @@ export function loadIntents() {
     // ✅ your screenshot shows intents.csv is at project root, one level above /server
     path.resolve(__dirname, "../../intents.csv"),
     path.resolve(__dirname, "../intents.csv"),
-    path.resolve(__dirname, "../../server/intents.csv")
+    path.resolve(__dirname, "../../server/intents.csv"),
   ];
 
   let csvPath = null;
@@ -200,7 +241,9 @@ export function loadIntents() {
   const hasNew = header.includes("response_fr") && header.includes("response_en");
   const hasOld = header.includes("response");
   if (!hasNew && !hasOld) {
-    console.warn("[Intents] intents.csv expected headers: intent,patterns,response OR intent,patterns,response_en,response_fr");
+    console.warn(
+      "[Intents] intents.csv expected headers: intent,patterns,response OR intent,patterns,response_en,response_fr"
+    );
   }
 
   return intents;
