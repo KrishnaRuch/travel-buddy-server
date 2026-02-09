@@ -76,16 +76,14 @@ export function makeAuthRouter() {
       }
     }
 
-    // Welcome email
-    try {
-      await sendEmail({
-        to: user.email,
-        subject: "Welcome to Travel Buddy",
-        html: welcomeEmailTemplate({ username: user.username, preferences: preferences || [] })
-      });
-    } catch (e) {
-      console.error("Welcome email failed:", e?.message || e);
-    }
+// Welcome email (do NOT block signup response)
+sendEmail({
+  to: user.email,
+  subject: "Welcome to Travel Buddy",
+  html: welcomeEmailTemplate({ username: user.username, preferences: preferences || [] })
+}).catch((e) => {
+  console.error("Welcome email failed:", e?.message || e);
+});
 
     const token = signToken(user.id);
 
@@ -160,16 +158,20 @@ export function makeAuthRouter() {
         </div>
       `;
 
-      await sendEmail({
-        to: user.email,
-        subject: "Travel Buddy — Password reset",
-        html
-      });
-    } catch (e) {
-      console.error("Forgot-password email failed:", e?.message || e);
-    }
+      sendEmail({
+  to: user.email,
+  subject: "Travel Buddy — Password reset",
+  html
+}).catch((e) => {
+  console.error("Forgot-password email failed:", e?.message || e);
+});
 
-    return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
+} catch (e) {
+  console.error("Forgot-password email failed:", e?.message || e);
+}
+
+return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
+
   });
 
   return authRouter;

@@ -1,4 +1,6 @@
+// server/src/utils/email.js
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 const BRAND = {
   name: "Travel Buddy",
@@ -12,78 +14,6 @@ function required(name) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return String(v).trim();
-}
-
-function makeTransporter() {
-  const provider = (process.env.EMAIL_PROVIDER || "gmail").toLowerCase();
-  const tlsInsecure =
-    String(process.env.EMAIL_TLS_INSECURE || "").toLowerCase() === "true";
-
-  const user = required("EMAIL_USER");
-  const pass = required("EMAIL_PASS");
-
-  if (provider === "gmail") {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: { user, pass },
-      ...(tlsInsecure ? { tls: { rejectUnauthorized: false } } : {})
-    });
-  }
-
-  // Generic SMTP option (if you ever switch later)
-  const host = required("EMAIL_HOST");
-  const port = Number(process.env.EMAIL_PORT || 587);
-  const secure = String(process.env.EMAIL_SECURE || "false").toLowerCase() === "true";
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
-    ...(tlsInsecure ? { tls: { rejectUnauthorized: false } } : {})
-  });
-}
-
-// ✅ Lazy init / auto-recover transporter
-let transporter = null;
-let lastVerifyAt = 0;
-
-async function getTransporter() {
-  if (!transporter) {
-    transporter = makeTransporter();
-    await transporter.verify();
-    lastVerifyAt = Date.now();
-    return transporter;
-  }
-
-  const now = Date.now();
-  if (now - lastVerifyAt > 5 * 60 * 1000) {
-    try {
-      await transporter.verify();
-      lastVerifyAt = now;
-    } catch (e) {
-      transporter = makeTransporter();
-      await transporter.verify();
-      lastVerifyAt = now;
-    }
-  }
-
-  return transporter;
-}
-
-/**
- * Send email with optional attachments
- */
-export async function sendEmail({ to, subject, html, attachments = [] }) {
-  const t = await getTransporter();
-
-  return t.sendMail({
-    from: `"${BRAND.name}" <${process.env.EMAIL_USER}>`,
-    to,
-    subject,
-    html,
-    attachments
-  });
 }
 
 function escapeHtml(str) {
@@ -147,11 +77,12 @@ function emailShell({ title, subtitle, contentHtml }) {
 }
 
 export function welcomeEmailTemplate({ username, preferences = [] }) {
-  const prefs = Array.isArray(preferences) && preferences.length
-    ? `<ul style="margin:10px 0 0 18px;padding:0;">${preferences
-        .map((p) => `<li>${escapeHtml(p)}</li>`)
-        .join("")}</ul>`
-    : `<p style="margin:8px 0 0 0;color:#374151;">Preferences: <b>Not specified</b></p>`;
+  const prefs =
+    Array.isArray(preferences) && preferences.length
+      ? `<ul style="margin:10px 0 0 18px;padding:0;">${preferences
+          .map((p) => `<li>${escapeHtml(p)}</li>`)
+          .join("")}</ul>`
+      : `<p style="margin:8px 0 0 0;color:#374151;">Preferences: <b>Not specified</b></p>`;
 
   const contentHtml = `
     <p style="margin:0 0 10px 0;">Hello <b>${escapeHtml(username)}</b>,</p>
@@ -166,11 +97,6 @@ export function welcomeEmailTemplate({ username, preferences = [] }) {
   });
 }
 
-/**
- * bookingEmailTemplate
- * - For taxi: externalLink should be Google Maps route
- * - taxiWhatsAppLink is optional (clean CTA button)
- */
 export function bookingEmailTemplate({
   username,
   bookingType,
@@ -181,7 +107,6 @@ export function bookingEmailTemplate({
 }) {
   const niceType = bookingType === "hotel" ? "Hotel booking" : "Taxi booking";
 
-  // Don’t show links inside the details table (they look ugly there)
   const HIDE_KEYS = new Set(["type", "externalLink", "taxiWhatsAppLink", "qrUrl"]);
 
   const rows = Object.entries(details || {})
@@ -201,9 +126,7 @@ export function bookingEmailTemplate({
     })
     .join("");
 
-  // ✅ CTA blocks
   const isTaxi = bookingType === "taxi";
-
   const primaryTitle = isTaxi ? "Open your route" : "Continue on booking partner";
   const primaryLabel = isTaxi ? "Open Google Maps route →" : "Open booking link →";
 
@@ -263,4 +186,91 @@ export function bookingEmailTemplate({
     subtitle: niceType,
     contentHtml
   });
+}
+
+// -------------------------
+// Sending
+// -------------------------
+
+let resend = null;
+
+function getFromAddress() {
+  return (process.env.EMAIL_FROM || `"${BRAND.name}" <onboarding@resend.dev>`).trim();
+}
+
+function getProvider() {
+  return String(process.env.EMAIL_PROVIDER || "gmail").toLowerCase().trim();
+}
+
+// Keep nodemailer as a fallback, but production should use Resend
+function makeNodemailerTransporter() {
+  const tlsInsecure = String(process.env.EMAIL_TLS_INSECURE || "").toLowerCase() === "true";
+
+  const user = required("EMAIL_USER");
+  const pass = required("EMAIL_PASS");
+
+  const host = process.env.EMAIL_HOST;
+  const port = Number(process.env.EMAIL_PORT || 587);
+  const secure = String(process.env.EMAIL_SECURE || "false").toLowerCase() === "true";
+
+  // If you still want Gmail via nodemailer locally, set EMAIL_HOST etc.
+  return nodemailer.createTransport({
+    ...(host ? { host } : { service: "gmail" }),
+    ...(host ? { port, secure } : {}),
+    auth: { user, pass },
+    ...(tlsInsecure ? { tls: { rejectUnauthorized: false } } : {}),
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000
+  });
+}
+
+let nodemailerTransporter = null;
+
+async function sendViaResend({ to, subject, html, attachments }) {
+  if (!resend) {
+    const key = required("RESEND_API_KEY");
+    resend = new Resend(key);
+  }
+
+  const from = getFromAddress();
+
+  // Resend attachments must be base64 or Buffer; your current code passes [] anyway.
+  // If you later add attachments, we can extend this.
+  const resp = await resend.emails.send({
+    from,
+    to,
+    subject,
+    html
+  });
+
+  return resp;
+}
+
+async function sendViaNodemailer({ to, subject, html, attachments }) {
+  if (!nodemailerTransporter) nodemailerTransporter = makeNodemailerTransporter();
+
+  const from = getFromAddress();
+
+  return nodemailerTransporter.sendMail({
+    from,
+    to,
+    subject,
+    html,
+    attachments: attachments || []
+  });
+}
+
+/**
+ * Send email with optional attachments
+ */
+export async function sendEmail({ to, subject, html, attachments = [] }) {
+  const provider = getProvider();
+
+  if (provider === "resend") {
+    return sendViaResend({ to, subject, html, attachments });
+  }
+
+  // fallback
+  return sendViaNodemailer({ to, subject, html, attachments });
 }
