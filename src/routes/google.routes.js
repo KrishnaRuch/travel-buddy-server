@@ -18,9 +18,10 @@ function getClientBaseUrl() {
   return (process.env.CLIENT_URL || "https://travel-buddy-kr134.vercel.app").replace(/\/$/, "");
 }
 
-function chatRedirectUrl(flag) {
-  // ✅ Your ChatPage reads the query params, so redirect to /chat
-  return `${getClientBaseUrl()}/chat?google=${flag}`;
+// ✅ IMPORTANT: Your app has no /chat route (no React Router).
+// Your ChatPage reads query params on the current page, so redirect to "/" only.
+function appRedirectUrl(flag) {
+  return `${getClientBaseUrl()}/?google=${flag}`;
 }
 
 export function makeGoogleRouter() {
@@ -33,7 +34,9 @@ export function makeGoogleRouter() {
       const userId = req.user.userId;
 
       const state = signState({ userId });
-      const url = buildAuthUrl({ state });
+
+      // ✅ Pass req so oauth redirect_uri can be correct on Render (see googleCalendar.js update below)
+      const url = buildAuthUrl({ state, req });
 
       return res.json({ ok: true, url });
     } catch (e) {
@@ -48,25 +51,26 @@ export function makeGoogleRouter() {
     try {
       const { code, state } = req.query || {};
       if (!code || !state) {
-        return res.redirect(chatRedirectUrl("error_missing_params"));
+        return res.redirect(appRedirectUrl("error_missing_params"));
       }
 
       let decoded;
       try {
         decoded = verifyState(String(state));
       } catch {
-        return res.redirect(chatRedirectUrl("error_bad_state"));
+        return res.redirect(appRedirectUrl("error_bad_state"));
       }
 
       const userId = decoded?.userId;
       if (!userId) {
-        return res.redirect(chatRedirectUrl("error_bad_state"));
+        return res.redirect(appRedirectUrl("error_bad_state"));
       }
 
-      const oAuth2Client = makeOAuthClient();
+      // ✅ Must use the same redirect_uri that was used in /auth/start
+      // Make sure makeOAuthClient uses SERVER_URL in production (next file below)
+      const oAuth2Client = makeOAuthClient({ req });
       const { tokens } = await oAuth2Client.getToken(String(code));
 
-      // Save tokens (keep refresh token if Google doesn't re-send it)
       await q(
         `
         INSERT INTO user_google_tokens(user_id, access_token, refresh_token, scope, token_type, expiry_date)
@@ -89,15 +93,14 @@ export function makeGoogleRouter() {
         ]
       );
 
-      return res.redirect(chatRedirectUrl("connected"));
+      return res.redirect(appRedirectUrl("connected"));
     } catch (e) {
       console.error("Google callback failed:", e?.message || e);
-      return res.redirect(chatRedirectUrl("error_callback"));
+      return res.redirect(appRedirectUrl("error_callback"));
     }
   });
 
   // ✅ Status
-  // GET /api/google/status
   router.get("/status", auth, async (req, res) => {
     try {
       const userId = req.user.userId;
@@ -117,7 +120,6 @@ export function makeGoogleRouter() {
   });
 
   // ✅ Disconnect
-  // POST /api/google/disconnect
   router.post("/disconnect", auth, async (req, res) => {
     try {
       const userId = req.user.userId;
@@ -128,8 +130,7 @@ export function makeGoogleRouter() {
     }
   });
 
-  // ✅ Sync booking -> Google Calendar
-  // POST /api/google/calendar/sync
+  // ✅ Manual sync endpoint (optional)
   router.post("/calendar/sync", auth, async (req, res) => {
     try {
       const userId = req.user.userId;
