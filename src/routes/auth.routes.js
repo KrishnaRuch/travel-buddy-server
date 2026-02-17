@@ -1,3 +1,5 @@
+// server/src/routes/auth.routes.js
+
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -37,114 +39,150 @@ export function makeAuthRouter() {
         mustChangePassword: u.must_change_password
       });
     } catch (e) {
+      console.error("Auth /me failed:", e?.message || e);
       return res.status(500).json({ error: "Failed to load user" });
     }
   });
 
   // SIGNUP
   authRouter.post("/signup", async (req, res) => {
-    const { email, password, username, preferences } = req.body || {};
+    try {
+      const { email, password, username, preferences } = req.body || {};
 
-    if (!email || !password || !username) {
-      return res.status(400).json({ error: "Email, password, and username are required" });
-    }
+      const cleanEmail = String(email || "").trim().toLowerCase();
+      const cleanPassword = String(password || "");
+      const cleanUsername = String(username || "").trim();
 
-    if (String(password).length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
-    }
-
-    const exists = await q("SELECT id FROM users WHERE email=$1", [email]);
-    if (exists.rows.length > 0) {
-      return res.status(400).json({ error: "Email already exists" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    const created = await q(
-      `INSERT INTO users(email, password_hash, username, must_change_password)
-       VALUES($1,$2,$3,FALSE)
-       RETURNING id, email, username, must_change_password`,
-      [email, passwordHash, username]
-    );
-
-    const user = created.rows[0];
-
-    // Save preferences (optional)
-    if (Array.isArray(preferences) && preferences.length > 0) {
-      for (const p of preferences) {
-        await q("INSERT INTO user_preferences(user_id, preference) VALUES($1,$2)", [user.id, p]);
+      if (!cleanEmail || !cleanPassword || !cleanUsername) {
+        return res
+          .status(400)
+          .json({ error: "Email, password, and username are required" });
       }
+
+      if (String(cleanPassword).length < 6) {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 6 characters" });
+      }
+
+      const exists = await q("SELECT id FROM users WHERE LOWER(email)=LOWER($1)", [
+        cleanEmail
+      ]);
+      if (exists.rows.length > 0) {
+        return res.status(400).json({ error: "Email already exists" });
+      }
+
+      const passwordHash = await bcrypt.hash(cleanPassword, 10);
+
+      const created = await q(
+        `INSERT INTO users(email, password_hash, username, must_change_password)
+         VALUES($1,$2,$3,FALSE)
+         RETURNING id, email, username, must_change_password`,
+        [cleanEmail, passwordHash, cleanUsername]
+      );
+
+      const user = created.rows[0];
+
+      // Save preferences (optional)
+      if (Array.isArray(preferences) && preferences.length > 0) {
+        for (const p of preferences) {
+          await q("INSERT INTO user_preferences(user_id, preference) VALUES($1,$2)", [
+            user.id,
+            String(p)
+          ]);
+        }
+      }
+
+      // ✅ Welcome email (do NOT block signup response)
+      sendEmail({
+        to: user.email,
+        subject: "Welcome to Travel Buddy",
+        html: welcomeEmailTemplate({
+          username: user.username,
+          preferences: Array.isArray(preferences) ? preferences : []
+        })
+      }).catch((e) => {
+        console.error("Welcome email failed:", e?.message || e);
+      });
+
+      const token = signToken(user.id);
+
+      return res.json({
+        token,
+        user: { id: user.id, email: user.email, username: user.username },
+        mustChangePassword: user.must_change_password
+      });
+    } catch (e) {
+      console.error("Signup failed:", e?.message || e);
+      return res.status(500).json({ error: "Signup failed" });
     }
-
-// Welcome email (do NOT block signup response)
-sendEmail({
-  to: user.email,
-  subject: "Welcome to Travel Buddy",
-  html: welcomeEmailTemplate({ username: user.username, preferences: preferences || [] })
-}).catch((e) => {
-  console.error("Welcome email failed:", e?.message || e);
-});
-
-    const token = signToken(user.id);
-
-    return res.json({
-      token,
-      user: { id: user.id, email: user.email, username: user.username },
-      mustChangePassword: user.must_change_password
-    });
   });
 
   // LOGIN
   authRouter.post("/login", async (req, res) => {
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+    try {
+      const { email, password } = req.body || {};
 
-    const found = await q(
-      "SELECT id, email, username, password_hash, must_change_password FROM users WHERE email=$1",
-      [email]
-    );
+      const cleanEmail = String(email || "").trim().toLowerCase();
+      const cleanPassword = String(password || "").trim();
 
-    if (found.rows.length === 0) {
-      return res.status(400).json({ error: "Invalid credentials" });
+      if (!cleanEmail || !cleanPassword) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+
+      const found = await q(
+        "SELECT id, email, username, password_hash, must_change_password FROM users WHERE LOWER(email)=LOWER($1)",
+        [cleanEmail]
+      );
+
+      if (found.rows.length === 0) {
+        return res.status(400).json({ error: "Invalid credentials" });
+      }
+
+      const u = found.rows[0];
+      const ok = await bcrypt.compare(cleanPassword, u.password_hash);
+      if (!ok) return res.status(400).json({ error: "Invalid credentials" });
+
+      const token = signToken(u.id);
+
+      return res.json({
+        token,
+        user: { id: u.id, email: u.email, username: u.username },
+        mustChangePassword: u.must_change_password
+      });
+    } catch (e) {
+      console.error("Login failed:", e?.message || e);
+      return res.status(500).json({ error: "Login failed" });
     }
-
-    const u = found.rows[0];
-    const ok = await bcrypt.compare(password, u.password_hash);
-    if (!ok) return res.status(400).json({ error: "Invalid credentials" });
-
-    const token = signToken(u.id);
-
-    return res.json({
-      token,
-      user: { id: u.id, email: u.email, username: u.username },
-      mustChangePassword: u.must_change_password
-    });
   });
 
   // FORGOT PASSWORD (reset to KR134)
   authRouter.post("/forgot-password", async (req, res) => {
-    const { email } = req.body || {};
-    if (!email) return res.status(400).json({ error: "Email is required" });
-
-    // Always respond ok (prevents account enumeration)
-    const found = await q("SELECT id, email, username FROM users WHERE email=$1", [email]);
-
-    if (found.rows.length === 0) {
-      return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
-    }
-
-    const user = found.rows[0];
-
-    const TEMP_PASSWORD = "KR134";
-    const passwordHash = await bcrypt.hash(TEMP_PASSWORD, 10);
-
-    await q(
-      "UPDATE users SET password_hash=$1, must_change_password=TRUE WHERE id=$2",
-      [passwordHash, user.id]
-    );
-
-    // Reset email
     try {
+      const { email } = req.body || {};
+      const cleanEmail = String(email || "").trim().toLowerCase();
+
+      if (!cleanEmail) return res.status(400).json({ error: "Email is required" });
+
+      // Always respond ok (prevents account enumeration)
+      const found = await q("SELECT id, email, username FROM users WHERE LOWER(email)=LOWER($1)", [
+        cleanEmail
+      ]);
+
+      if (found.rows.length === 0) {
+        return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
+      }
+
+      const user = found.rows[0];
+
+      const TEMP_PASSWORD = "KR134";
+      const passwordHash = await bcrypt.hash(TEMP_PASSWORD, 10);
+
+      await q("UPDATE users SET password_hash=$1, must_change_password=TRUE WHERE id=$2", [
+        passwordHash,
+        user.id
+      ]);
+
       const html = `
         <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111827">
           <h2 style="margin:0 0 10px 0;">Password reset</h2>
@@ -158,20 +196,20 @@ sendEmail({
         </div>
       `;
 
+      // ✅ Reset email (do NOT block response)
       sendEmail({
-  to: user.email,
-  subject: "Travel Buddy — Password reset",
-  html
-}).catch((e) => {
-  console.error("Forgot-password email failed:", e?.message || e);
-});
+        to: user.email,
+        subject: "Travel Buddy — Password reset",
+        html
+      }).catch((e) => {
+        console.error("Forgot-password email failed:", e?.message || e);
+      });
 
-} catch (e) {
-  console.error("Forgot-password email failed:", e?.message || e);
-}
-
-return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
-
+      return res.json({ ok: true, message: "If the email exists, a reset email was sent." });
+    } catch (e) {
+      console.error("Forgot-password route failed:", e?.message || e);
+      return res.status(500).json({ error: "Failed to process password reset" });
+    }
   });
 
   return authRouter;
