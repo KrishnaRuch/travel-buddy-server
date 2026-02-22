@@ -281,8 +281,8 @@ bookingRouter.post("/", auth, async (req, res) => {
         to: user.email,
         subject:
           data.type === "hotel"
-            ? "Travel Buddy ✅ Hotel booking confirmation"
-            : "Travel Buddy ✅ Taxi booking confirmation",
+            ? "Hotel booking confirmation"
+            : "Taxi booking confirmation",
         html: bookingEmailTemplate({
           username: user.username,
           bookingType: data.type,

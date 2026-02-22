@@ -199,7 +199,7 @@ export function makeAuthRouter() {
       // ✅ Reset email (do NOT block response)
       sendEmail({
         to: user.email,
-        subject: "Travel Buddy — Password reset",
+        subject: "Password reset",
         html
       }).catch((e) => {
         console.error("Forgot-password email failed:", e?.message || e);
