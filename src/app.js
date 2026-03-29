@@ -1,3 +1,5 @@
+// server/src/app.js
+
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -9,7 +11,10 @@ import { makeAuthRouter } from "./routes/auth.routes.js";
 import { bookingRouter } from "./routes/booking.routes.js";
 import { makeChatRouter } from "./routes/chat.routes.js";
 import { makePasswordRouter } from "./routes/password.routes.js";
-import { makeGoogleRouter } from "./routes/google.routes.js"; // ✅ NEW
+import { makeGoogleRouter } from "./routes/google.routes.js";
+
+import { makeRecommendationsRouter } from "./routes/recommendations.routes.js";
+import { makeSupportRouter } from "./routes/support.routes.js";
 
 dotenv.config();
 
@@ -17,11 +22,12 @@ export function createApp(intents) {
   const app = express();
 
   // -------------------------
-  // CORS (allow localhost + 127 so dev never randomly breaks)
+  // CORS
   // -------------------------
   const allowedOrigins = [
     process.env.CLIENT_URL,
     "https://travel-buddy-kr134.vercel.app",
+    "http://localhost:5173",
     "http://127.0.0.1:5173"
   ].filter(Boolean);
 
@@ -44,6 +50,7 @@ export function createApp(intents) {
   // Body / cookies
   // -------------------------
   app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
 
   // -------------------------
@@ -64,14 +71,18 @@ export function createApp(intents) {
   // -------------------------
   app.use("/api/auth", makeAuthRouter());
   app.use("/api/auth", makePasswordRouter());
+
   app.use("/api/chat", makeChatRouter(intents));
   app.use("/api/bookings", bookingRouter);
 
-  // ✅ NEW: Google Calendar connect + callback + status
   app.use("/api/google", makeGoogleRouter());
 
+  // ✅ New features
+  app.use("/api/recommendations", makeRecommendationsRouter());
+  app.use("/api/support", makeSupportRouter());
+
   // -------------------------
-  // Fallback 404 (nice for debugging)
+  // Fallback 404
   // -------------------------
   app.use((req, res) => {
     res.status(404).json({ error: "Not found" });
