@@ -1,3 +1,5 @@
+// server/src/routes/chat.routes.js
+
 import express from "express";
 import { auth } from "../middleware/auth.js";
 import { q } from "../db.js";
@@ -21,6 +23,42 @@ function tokenize(text) {
 }
 
 // -------------------------
+// URL helpers for Recommendations
+// -------------------------
+function isGenericBookingUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return true;
+
+  const low = raw.toLowerCase();
+  if (low === "https://www.booking.com" || low === "https://www.booking.com/") return true;
+  if (low === "http://www.booking.com" || low === "http://www.booking.com/") return true;
+
+  try {
+    const u = new URL(raw);
+    const host = (u.hostname || "").toLowerCase();
+    if (!host.includes("booking.com")) return false;
+
+    const path = u.pathname || "/";
+    const hasSearch = u.search && u.search.length > 1;
+
+    if ((path === "/" || path === "") && !hasSearch) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function buildBookingSearchLink(name, area) {
+  const ss = encodeURIComponent(`${name || ""} ${area || "Mauritius"}`.trim());
+  return `https://www.booking.com/searchresults.html?ss=${ss}`;
+}
+
+function buildActivitySearchLink(name, area) {
+  const q = encodeURIComponent(`${name || ""} ${area || "Mauritius"} activity`.trim());
+  return `https://www.google.com/search?q=${q}`;
+}
+
+// -------------------------
 // Recommendation + handover heuristics
 // -------------------------
 function looksLikeRecommendation(msg) {
@@ -36,12 +74,11 @@ function looksLikeRecommendation(msg) {
     m.includes("things to do") ||
     m.includes("places to visit") ||
     m.includes("what can i do") ||
-    m.includes("recommande") || // FR-ish
+    m.includes("recommande") ||
     m.includes("suggere") ||
     m.includes("activité") ||
     m.includes("activite") ||
-    m.includes("hôtel") ||
-    m.includes("hotel")
+    m.includes("hôtel")
   );
 }
 
@@ -159,7 +196,7 @@ export function makeChatRouter(intents) {
         });
       }
 
-      // ✅ Human-agent transfer
+      // ✅ Human-agent transfer (WhatsApp only)
       if (wantsHuman(message) || isComplex(message)) {
         const supportNumber = String(process.env.SUPPORT_WHATSAPP || "23057223280")
           .replace(/\D/g, "")
@@ -175,16 +212,12 @@ export function makeChatRouter(intents) {
           type: "handover",
           text:
             L === "fr"
-              ? "Cette demande semble plus complexe. Souhaitez-vous contacter un agent humain ?"
-              : "This request seems more complex. Would you like to contact a human agent?",
+              ? "Cette demande semble plus complexe. Cliquez ci-dessous pour contacter un agent via WhatsApp."
+              : "This request seems more complex. Click below to contact a human agent on WhatsApp.",
           actions: [
             {
               label: "WhatsApp (Agent) →",
               url: `https://wa.me/${supportNumber}?text=${safeMsg}`
-            },
-            {
-              label: L === "fr" ? "Créer un ticket support" : "Create support ticket",
-              action: "create_ticket"
             }
           ]
         });
@@ -227,7 +260,25 @@ export function makeChatRouter(intents) {
           });
         }
 
-        const lines = ranked.map((x, i) => {
+        const itemsForClient = ranked.map((it) => {
+          const area = String(it.area || "").trim();
+          const name = String(it.name || "").trim();
+          const ext = String(it.external_url || "").trim();
+
+          if (it.type === "hotel") {
+            const finalUrl = isGenericBookingUrl(ext)
+              ? buildBookingSearchLink(name, area)
+              : ext;
+
+            return { ...it, external_url: finalUrl };
+          }
+
+          // activity
+          const finalActUrl = ext ? ext : buildActivitySearchLink(name, area);
+          return { ...it, external_url: finalActUrl };
+        });
+
+        const lines = itemsForClient.map((x, i) => {
           const tagText = (x.tags || []).slice(0, 4).join(", ");
           const price = x.price_range ? ` (${x.price_range})` : "";
           return `${i + 1}) ${x.name} — ${x.area}${price}\n   Tags: ${tagText}\n   ${x.description}`;
@@ -242,7 +293,7 @@ export function makeChatRouter(intents) {
               : `Here are some recommended ${
                   recType === "hotel" ? "hotels" : "activities"
                 }:\n\n`) + lines.join("\n\n"),
-          items: ranked
+          items: itemsForClient
         });
       }
 
