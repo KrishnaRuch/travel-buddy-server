@@ -1,358 +1,707 @@
 // server/src/routes/chat.routes.js
 
+
+
 import express from "express";
+
 import { auth } from "../middleware/auth.js";
+
 import { q } from "../db.js";
+
 import { matchIntent } from "../utils/intents.js";
+
 import { geminiReply } from "../utils/gemini.js";
 
+
+
 function normalizeLang(lang) {
+
   const s = String(lang || "").toLowerCase().trim();
+
   return s === "fr" || s.startsWith("fr") ? "fr" : "en";
+
 }
+
+
 
 function clean(s) {
+
   return String(s || "").trim().toLowerCase();
+
 }
+
+
 
 function tokenize(text) {
+
   return clean(text)
+
     .replace(/[^a-z0-9\s]/g, " ")
+
     .split(/\s+/)
+
     .filter(Boolean);
+
 }
+
+
 
 // -------------------------
-// URL helpers for Recommendations
-// -------------------------
-function isGenericBookingUrl(url) {
-  const raw = String(url || "").trim();
-  if (!raw) return true;
 
-  const low = raw.toLowerCase();
-  if (low === "https://www.booking.com" || low === "https://www.booking.com/") return true;
-  if (low === "http://www.booking.com" || low === "http://www.booking.com/") return true;
+// Recommendations trigger (STRICT)
 
-  try {
-    const u = new URL(raw);
-    const host = (u.hostname || "").toLowerCase();
-    if (!host.includes("booking.com")) return false;
-
-    const path = u.pathname || "/";
-    const hasSearch = u.search && u.search.length > 1;
-
-    if ((path === "/" || path === "") && !hasSearch) return true;
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-function buildBookingSearchLink(name, area) {
-  const ss = encodeURIComponent(`${name || ""} ${area || "Mauritius"}`.trim());
-  return `https://www.booking.com/searchresults.html?ss=${ss}`;
-}
-
-function buildActivitySearchLink(name, area) {
-  const q = encodeURIComponent(`${name || ""} ${area || "Mauritius"} activity`.trim());
-  return `https://www.google.com/search?q=${q}`;
-}
+// Only trigger recommendations if the prompt contains the word "recommend"
 
 // -------------------------
-// Recommendation + handover heuristics
-// -------------------------
-function looksLikeRecommendation(msg) {
-  const m = clean(msg);
-  return (
-    m.includes("recommend") ||
-    m.includes("suggest") ||
-    m.includes("recommendation") ||
-    m.includes("hotels") ||
-    m.includes("hotel") ||
-    m.includes("activities") ||
-    m.includes("activity") ||
-    m.includes("things to do") ||
-    m.includes("places to visit") ||
-    m.includes("what can i do") ||
-    m.includes("recommande") ||
-    m.includes("suggere") ||
-    m.includes("activité") ||
-    m.includes("activite") ||
-    m.includes("hôtel")
-  );
+
+function wantsRecommendation(msg) {
+
+  return /\brecommend\b/i.test(String(msg || ""));
+
 }
+
+
 
 function inferRecType(msg) {
+
   const m = clean(msg);
+
+
+
+  // If user says "recommend activities" or includes activity signals -> activity
+
   if (
+
     m.includes("activity") ||
+
     m.includes("activities") ||
+
     m.includes("things to do") ||
-    m.includes("places to visit") ||
-    m.includes("activité") ||
-    m.includes("activite") ||
-    m.includes("activités") ||
-    m.includes("activites")
+
+    m.includes("places to visit")
+
   ) {
+
     return "activity";
+
   }
+
+
+
+  // Default: hotel
+
   return "hotel";
+
 }
+
+
+
+// -------------------------
+
+// Human-agent transfer heuristics
+
+// -------------------------
 
 function wantsHuman(msg) {
+
   const m = clean(msg);
+
   return (
+
     m.includes("human") ||
+
     m.includes("agent") ||
+
     m.includes("representative") ||
+
     m.includes("support") ||
+
     m.includes("help desk") ||
+
     m.includes("contact") ||
+
     m.includes("talk to someone") ||
+
     m.includes("someone real") ||
+
     m.includes("humain") ||
+
     m.includes("assistance") ||
+
     m.includes("contactez")
+
   );
+
 }
+
+
 
 function isComplex(msg) {
+
   const s = String(msg || "");
+
   return (
+
     s.length > 220 ||
+
     /refund|complaint|legal|payment|urgent|problem|not working|error|chargeback|bug|fail/i.test(s)
+
   );
+
 }
 
+
+
+// -------------------------
+
+// URL helpers for recommendation buttons
+
+// -------------------------
+
+function isGenericBookingUrl(url) {
+
+  const raw = String(url || "").trim();
+
+  if (!raw) return true;
+
+
+
+  const low = raw.toLowerCase();
+
+  if (low === "https://www.booking.com" || low === "https://www.booking.com/") return true;
+
+  if (low === "http://www.booking.com" || low === "http://www.booking.com/") return true;
+
+
+
+  try {
+
+    const u = new URL(raw);
+
+    const host = (u.hostname || "").toLowerCase();
+
+    if (!host.includes("booking.com")) return false;
+
+
+
+    const path = u.pathname || "/";
+
+    const hasSearch = u.search && u.search.length > 1;
+
+
+
+    // Booking.com homepage with no useful query = generic
+
+    if ((path === "/" || path === "") && !hasSearch) return true;
+
+
+
+    return false;
+
+  } catch {
+
+    return true;
+
+  }
+
+}
+
+
+
+function buildBookingSearchLink(name, area) {
+
+  const ss = encodeURIComponent(`${name || ""} ${area || "Mauritius"}`.trim());
+
+  return `https://www.booking.com/searchresults.html?ss=${ss}`;
+
+}
+
+
+
+function buildActivitySearchLink(name, area) {
+
+  const query = encodeURIComponent(`${name || ""} ${area || "Mauritius"} activity`.trim());
+
+  return `https://www.google.com/search?q=${query}`;
+
+}
+
+
+
+// -------------------------
+
+// Recommendation scoring (content-based)
+
+// -------------------------
+
 function scoreContentBased({ item, userPrefs, queryTokens }) {
+
   const tags = (item.tags || []).map((t) => clean(t));
+
   const area = clean(item.area);
+
   let score = 0;
 
+
+
   for (const t of tags) {
-    if (userPrefs.has(t)) score += 3;
-    if (queryTokens.has(t)) score += 2;
+
+    if (userPrefs.has(t)) score += 3;     // user preferences
+
+    if (queryTokens.has(t)) score += 2;   // query keywords
+
   }
+
+
 
   if (area && queryTokens.has(area)) score += 1;
 
+
+
   const nameTokens = new Set(tokenize(item.name));
+
   for (const qt of queryTokens) {
+
     if (nameTokens.has(qt)) score += 1;
+
   }
 
+
+
   return score;
+
 }
 
+
+
 export function makeChatRouter(intents) {
+
   const chatRouter = express.Router();
 
+
+
   chatRouter.post("/", auth, async (req, res) => {
+
     try {
+
       const { message, lang } = req.body || {};
+
       const userId = req.user.userId;
+
+
 
       const L = normalizeLang(lang);
 
+
+
       if (!message || !String(message).trim()) {
+
         return res.status(400).json({
+
           error: L === "fr" ? "Le message est requis" : "Message is required"
+
         });
+
       }
+
+
 
       // Save prompt
+
       await q("INSERT INTO user_prompts(user_id, prompt) VALUES($1,$2)", [
+
         userId,
+
         message
+
       ]);
 
+
+
       // Keep only last 10 prompts per user
+
       await q(
+
         `DELETE FROM user_prompts
+
          WHERE id IN (
+
            SELECT id FROM user_prompts
+
            WHERE user_id=$1
+
            ORDER BY created_at DESC
+
            OFFSET 10
+
          )`,
+
         [userId]
+
       );
 
+
+
       // ✅ Intent match
+
       const matched = matchIntent(intents, message, L);
+
       if (matched) {
+
         if (matched.intent === "book_hotel" || matched.intent === "book_taxi") {
+
           return res.json({
+
             type: "trigger",
+
             intent: matched.intent,
+
             text: matched.response
+
           });
+
         }
 
+
+
         return res.json({
+
           type: "intent",
+
           intent: matched.intent,
+
           text: matched.response
+
         });
+
       }
+
+
 
       // ✅ Human-agent transfer (WhatsApp only)
+
       if (wantsHuman(message) || isComplex(message)) {
+
         const supportNumber = String(process.env.SUPPORT_WHATSAPP || "23057223280")
+
           .replace(/\D/g, "")
+
           .trim();
 
+
+
         const safeMsg = encodeURIComponent(
+
           L === "fr"
+
             ? `Bonjour, j’ai besoin d’aide pour: ${message}`
+
             : `Hello, I need help with: ${message}`
+
         );
+
+
 
         return res.json({
+
           type: "handover",
+
           text:
+
             L === "fr"
+
               ? "Cette demande semble plus complexe. Cliquez ci-dessous pour contacter un agent via WhatsApp."
+
               : "This request seems more complex. Click below to contact a human agent on WhatsApp.",
+
           actions: [
+
             {
+
               label: "WhatsApp (Agent) →",
+
               url: `https://wa.me/${supportNumber}?text=${safeMsg}`
+
             }
+
           ]
+
         });
+
       }
 
-      // ✅ Recommendations
-      if (looksLikeRecommendation(message)) {
+
+
+      // ✅ Recommendations (ONLY if message contains the word "recommend")
+
+      if (wantsRecommendation(message)) {
+
         const recType = inferRecType(message);
 
+
+
         const prefRows = await q(
+
           "SELECT preference FROM user_preferences WHERE user_id=$1",
+
           [userId]
+
         );
+
         const userPrefs = new Set(prefRows.rows.map((r) => clean(r.preference)));
 
+
+
         const itemsRes = await q(
-          "SELECT id, type, name, area, description, tags, price_range, external_url FROM catalog_items WHERE type=$1 LIMIT 200",
+
+          `SELECT id, type, name, area, description, tags, price_range, external_url
+
+           FROM catalog_items
+
+           WHERE type=$1
+
+           LIMIT 200`,
+
           [recType]
+
         );
+
+
 
         const queryTokens = new Set(tokenize(message));
 
+
+
         const ranked = itemsRes.rows
+
           .map((it) => ({
+
             ...it,
+
             score: scoreContentBased({ item: it, userPrefs, queryTokens })
+
           }))
+
           .sort((a, b) => b.score - a.score)
+
           .slice(0, 5);
 
+
+
         if (!ranked.length) {
+
           return res.json({
+
             type: "recommendations",
+
             recType,
+
             text:
+
               L === "fr"
+
                 ? "Je n’ai pas encore assez d’éléments dans le catalogue pour recommander des options. Veuillez réessayer plus tard."
+
                 : "I don’t have enough catalog items yet to recommend options. Please try again later.",
+
             items: []
+
           });
+
         }
+
+
+
+        // Ensure each item has a useful link
 
         const itemsForClient = ranked.map((it) => {
-          const area = String(it.area || "").trim();
+
           const name = String(it.name || "").trim();
+
+          const area = String(it.area || "").trim();
+
           const ext = String(it.external_url || "").trim();
 
+
+
           if (it.type === "hotel") {
+
             const finalUrl = isGenericBookingUrl(ext)
+
               ? buildBookingSearchLink(name, area)
+
               : ext;
 
+
+
             return { ...it, external_url: finalUrl };
+
           }
 
+
+
           // activity
+
           const finalActUrl = ext ? ext : buildActivitySearchLink(name, area);
+
           return { ...it, external_url: finalActUrl };
+
         });
+
+
 
         const lines = itemsForClient.map((x, i) => {
+
           const tagText = (x.tags || []).slice(0, 4).join(", ");
+
           const price = x.price_range ? ` (${x.price_range})` : "";
+
           return `${i + 1}) ${x.name} — ${x.area}${price}\n   Tags: ${tagText}\n   ${x.description}`;
+
         });
+
+
 
         return res.json({
+
           type: "recommendations",
+
           recType,
+
           text:
+
             (L === "fr"
+
               ? `Voici quelques ${recType === "hotel" ? "hôtels" : "activités"} recommandés :\n\n`
+
               : `Here are some recommended ${
+
                   recType === "hotel" ? "hotels" : "activities"
+
                 }:\n\n`) + lines.join("\n\n"),
+
           items: itemsForClient
+
         });
+
       }
 
-      // ✅ Gemini fallback
+
+
+      // ✅ Gemini fallback (normal travel questions go here)
+
       const last = await q(
+
         "SELECT prompt FROM user_prompts WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+
         [userId]
+
       );
+
       const context = last.rows.map((r) => r.prompt).reverse();
 
+
+
       try {
+
         const reply = await geminiReply({
+
           prompt: message,
+
           userContextPrompts: context,
+
           lang: L
+
         });
+
+
 
         if (!reply || String(reply).toLowerCase().includes("not configured")) {
+
           return res.json({
+
             type: "fallback",
+
             text:
+
               L === "fr"
+
                 ? "Désolé ☹️. Je ne peux pas traiter cette demande pour le moment (service IA indisponible).\n" +
+
                   "Essayez plus tard, ou utilisez :\n" +
+
                   "• réserver un hôtel\n" +
+
                   "• réserver un taxi"
+
                 : "Sorry ☹️. I can’t process that request right now (AI service unavailable). " +
+
                   "Please try again later, or use one of these commands:\n" +
+
                   "• book hotel\n" +
+
                   "• book taxi"
+
           });
+
         }
 
+
+
         return res.json({
+
           type: "gemini",
+
           text: reply
+
         });
+
       } catch (e) {
+
         console.error("Gemini error:", e?.message || e);
 
+
+
         return res.json({
+
           type: "fallback",
+
           text:
+
             L === "fr"
+
               ? "Désolé 😥. J’ai du mal à répondre pour le moment (service IA indisponible).\n" +
+
                 "Essayez plus tard, ou utilisez :\n" +
+
                 "• réserver un hôtel\n" +
+
                 "• réserver un taxi"
+
               : "Sorry 😥. I’m having trouble answering that right now (AI service unavailable). " +
+
                 "Please try again later, or use one of these commands:\n" +
+
                 "• book hotel\n" +
+
                 "• book taxi"
+
         });
+
       }
+
     } catch (err) {
+
       console.error("Chat route error:", err?.message || err);
+
       return res.status(500).json({ error: "Chat failed" });
+
     }
+
   });
 
+
+
   return chatRouter;
+
 }
