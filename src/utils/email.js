@@ -1,4 +1,5 @@
 // server/src/utils/email.js
+
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
 
@@ -10,9 +11,11 @@ const BRAND = {
 
 function required(name) {
   const v = process.env[name];
+
   if (!v || !String(v).trim()) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
+
   return String(v).trim();
 }
 
@@ -47,42 +50,49 @@ function keyLabel(k) {
     externalLink: "Booking link",
     taxiWhatsAppLink: "WhatsApp link"
   };
+
   return map[k] || k;
 }
 
 function emailShell({ title, subtitle, contentHtml }) {
   return `
-  <div style="background:#f3f4f6;padding:24px 12px;">
-    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e5e7eb;">
-      <div style="padding:18px 20px;background:linear-gradient(135deg, ${BRAND.accent}, ${BRAND.accent2});color:#fff;">
-        <div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;letter-spacing:0.2px;">
-          ${BRAND.name}
+    <div style="background:#f3f4f6;padding:24px 12px;">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e5e7eb;">
+        <div style="padding:18px 20px;background:linear-gradient(135deg, ${BRAND.accent}, ${BRAND.accent2});color:#fff;">
+          <div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;letter-spacing:0.2px;">
+            ${BRAND.name}
+          </div>
+          <div style="font-family:Arial,sans-serif;font-size:13px;opacity:0.92;margin-top:3px;">
+            ${escapeHtml(subtitle || "")}
+          </div>
         </div>
-        <div style="font-family:Arial,sans-serif;font-size:13px;opacity:0.92;margin-top:3px;">
-          ${escapeHtml(subtitle || "")}
+
+        <div style="padding:22px 20px;font-family:Arial,sans-serif;color:#111827;line-height:1.5;">
+          <h2 style="margin:0 0 10px 0;font-size:18px;">${escapeHtml(title)}</h2>
+          ${contentHtml}
         </div>
-      </div>
 
-      <div style="padding:22px 20px;font-family:Arial,sans-serif;color:#111827;line-height:1.5;">
-        <h2 style="margin:0 0 10px 0;font-size:18px;">${escapeHtml(title)}</h2>
-        ${contentHtml}
-      </div>
-
-      <div style="padding:14px 20px;border-top:1px solid #e5e7eb;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">
-        © ${new Date().getFullYear()} ${BRAND.name}
+        <div style="padding:14px 20px;border-top:1px solid #e5e7eb;font-family:Arial,sans-serif;font-size:12px;color:#6b7280;">
+          © ${new Date().getFullYear()} ${BRAND.name}
+        </div>
       </div>
     </div>
-  </div>
   `;
 }
 
 export function welcomeEmailTemplate({ username, preferences = [] }) {
   const prefs =
     Array.isArray(preferences) && preferences.length
-      ? `<ul style="margin:10px 0 0 18px;padding:0;">${preferences
-          .map((p) => `<li>${escapeHtml(p)}</li>`)
-          .join("")}</ul>`
-      : `<p style="margin:8px 0 0 0;color:#374151;">Preferences: <b>Not specified</b></p>`;
+      ? `
+          <ul style="margin:10px 0 0 18px;padding:0;">
+            ${preferences.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}
+          </ul>
+        `
+      : `
+          <p style="margin:8px 0 0 0;color:#374151;">
+            Preferences: <b>Not specified</b>
+          </p>
+        `;
 
   const contentHtml = `
     <p style="margin:0 0 10px 0;">Hello <b>${escapeHtml(username)}</b>,</p>
@@ -107,13 +117,20 @@ export function bookingEmailTemplate({
 }) {
   const niceType = bookingType === "hotel" ? "Hotel booking" : "Taxi booking";
 
-  const HIDE_KEYS = new Set(["type", "externalLink", "taxiWhatsAppLink", "qrUrl"]);
+  const HIDE_KEYS = new Set([
+    "type",
+    "externalLink",
+    "taxiWhatsAppLink",
+    "qrUrl",
+    "lang"
+  ]);
 
   const rows = Object.entries(details || {})
     .filter(([k]) => !HIDE_KEYS.has(k))
     .map(([k, v]) => {
       const label = keyLabel(k);
       const value = escapeHtml(v);
+
       return `
         <tr>
           <td style="padding:10px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:700;width:40%;">
@@ -122,7 +139,8 @@ export function bookingEmailTemplate({
           <td style="padding:10px 12px;border:1px solid #e5e7eb;">
             ${value}
           </td>
-        </tr>`;
+        </tr>
+      `;
     })
     .join("");
 
@@ -132,49 +150,55 @@ export function bookingEmailTemplate({
 
   const linkBlock = externalLink
     ? `
-      <div style="margin-top:14px;padding:12px;border:1px solid #e5e7eb;border-radius:14px;background:#f9fafb;">
-        <div style="font-weight:700;margin-bottom:10px;">${escapeHtml(primaryTitle)}</div>
+        <div style="margin-top:14px;padding:12px;border:1px solid #e5e7eb;border-radius:14px;background:#f9fafb;">
+          <div style="font-weight:700;margin-bottom:10px;">
+            ${escapeHtml(primaryTitle)}
+          </div>
 
-        <a href="${escapeHtml(externalLink)}"
-           style="display:inline-block;background:${BRAND.accent};color:#fff;text-decoration:none;font-weight:700;padding:10px 14px;border-radius:12px;">
-          ${escapeHtml(primaryLabel)}
-        </a>
+          <a href="${escapeHtml(externalLink)}"
+             style="display:inline-block;background:${BRAND.accent};color:#fff;text-decoration:none;font-weight:700;padding:10px 14px;border-radius:12px;">
+            ${escapeHtml(primaryLabel)}
+          </a>
 
-        ${
-          isTaxi && taxiWhatsAppLink
-            ? `
-              <a href="${escapeHtml(taxiWhatsAppLink)}"
-                 style="display:inline-block;margin-left:10px;background:${BRAND.accent2};color:#fff;text-decoration:none;font-weight:700;padding:10px 14px;border-radius:12px;">
-                Message on WhatsApp →
-              </a>
-            `
-            : ""
-        }
-      </div>
-    `
+          ${
+            isTaxi && taxiWhatsAppLink
+              ? `
+                  <a href="${escapeHtml(taxiWhatsAppLink)}"
+                     style="display:inline-block;margin-left:10px;background:${BRAND.accent2};color:#fff;text-decoration:none;font-weight:700;padding:10px 14px;border-radius:12px;">
+                    Message on WhatsApp →
+                  </a>
+                `
+              : ""
+          }
+        </div>
+      `
     : "";
 
   const qrBlock = qrUrl
     ? `
-      <div style="margin-top:14px;">
-        <div style="font-weight:700;margin-bottom:8px;">
-          ${isTaxi ? "Scan QR to open the route" : "Scan QR to open link"}
+        <div style="margin-top:14px;">
+          <div style="font-weight:700;margin-bottom:8px;">
+            ${isTaxi ? "Scan QR to open the route" : "Scan QR to open link"}
+          </div>
+
+          <img src="${escapeHtml(qrUrl)}"
+               alt="Booking QR code"
+               style="width:180px;height:180px;border-radius:14px;border:1px solid #e5e7eb;" />
         </div>
-        <img src="${escapeHtml(qrUrl)}"
-             alt="Booking QR code"
-             style="width:180px;height:180px;border-radius:14px;border:1px solid #e5e7eb;" />
-      </div>
-    `
+      `
     : "";
 
   const contentHtml = `
     <p style="margin:0 0 10px 0;">Hello <b>${escapeHtml(username)}</b>,</p>
+
     <p style="margin:0 0 14px 0;color:#374151;">
       Your <b>${escapeHtml(niceType)}</b> request has been received.
     </p>
 
     <table style="border-collapse:collapse;width:100%;font-size:14px;">
-      <tbody>${rows}</tbody>
+      <tbody>
+        ${rows}
+      </tbody>
     </table>
 
     ${linkBlock}
@@ -193,18 +217,19 @@ export function bookingEmailTemplate({
 // -------------------------
 
 let resend = null;
+let nodemailerTransporter = null;
 
 function getFromAddress() {
   return (process.env.EMAIL_FROM || `"${BRAND.name}" <onboarding@resend.dev>`).trim();
 }
 
 function getProvider() {
-  return String(process.env.EMAIL_PROVIDER || "gmail").toLowerCase().trim();
+  return String(process.env.EMAIL_PROVIDER || "resend").toLowerCase().trim();
 }
 
-// Keep nodemailer as a fallback, but production should use Resend
 function makeNodemailerTransporter() {
-  const tlsInsecure = String(process.env.EMAIL_TLS_INSECURE || "").toLowerCase() === "true";
+  const tlsInsecure =
+    String(process.env.EMAIL_TLS_INSECURE || "").toLowerCase() === "true";
 
   const user = required("EMAIL_USER");
   const pass = required("EMAIL_PASS");
@@ -213,7 +238,6 @@ function makeNodemailerTransporter() {
   const port = Number(process.env.EMAIL_PORT || 587);
   const secure = String(process.env.EMAIL_SECURE || "false").toLowerCase() === "true";
 
-  // If you still want Gmail via nodemailer locally, set EMAIL_HOST etc.
   return nodemailer.createTransport({
     ...(host ? { host } : { service: "gmail" }),
     ...(host ? { port, secure } : {}),
@@ -225,9 +249,7 @@ function makeNodemailerTransporter() {
   });
 }
 
-let nodemailerTransporter = null;
-
-async function sendViaResend({ to, subject, html, attachments }) {
+async function sendViaResend({ to, subject, html }) {
   if (!resend) {
     const key = required("RESEND_API_KEY");
     resend = new Resend(key);
@@ -235,20 +257,24 @@ async function sendViaResend({ to, subject, html, attachments }) {
 
   const from = getFromAddress();
 
-  // Resend attachments must be base64 or Buffer; your current code passes [] anyway.
-  // If you later add attachments, we can extend this.
-  const resp = await resend.emails.send({
+  const { data, error } = await resend.emails.send({
     from,
     to,
     subject,
     html
   });
 
-  return resp;
+  if (error) {
+    throw new Error(error.message || JSON.stringify(error));
+  }
+
+  return data;
 }
 
-async function sendViaNodemailer({ to, subject, html, attachments }) {
-  if (!nodemailerTransporter) nodemailerTransporter = makeNodemailerTransporter();
+async function sendViaNodemailer({ to, subject, html, attachments = [] }) {
+  if (!nodemailerTransporter) {
+    nodemailerTransporter = makeNodemailerTransporter();
+  }
 
   const from = getFromAddress();
 
@@ -257,20 +283,31 @@ async function sendViaNodemailer({ to, subject, html, attachments }) {
     to,
     subject,
     html,
-    attachments: attachments || []
+    attachments
   });
 }
 
 /**
- * Send email with optional attachments
+ * Main email function used by:
+ * - auth.routes.js
+ * - booking.routes.js
  */
 export async function sendEmail({ to, subject, html, attachments = [] }) {
   const provider = getProvider();
 
   if (provider === "resend") {
-    return sendViaResend({ to, subject, html, attachments });
+    return sendViaResend({
+      to,
+      subject,
+      html,
+      attachments
+    });
   }
 
-  // fallback
-  return sendViaNodemailer({ to, subject, html, attachments });
+  return sendViaNodemailer({
+    to,
+    subject,
+    html,
+    attachments
+  });
 }
